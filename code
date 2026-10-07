@@ -1,0 +1,702 @@
+# ============================================================
+# RoadSense AI
+# Pothole Detection Using CNN
+# Small Automatic Sample Dataset
+# ============================================================
+
+import os
+import requests
+import shutil
+import random
+from pathlib import Path
+
+import numpy as np
+import tensorflow as tf
+
+from tensorflow.keras import layers, models
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.preprocessing import image
+
+
+# ============================================================
+# 1. PROJECT SETTINGS
+# ============================================================
+
+PROJECT_DIR = Path(
+    r"C:\Users\MOULIKA\Downloads\RoadSense_AI"
+)
+
+DATASET_DIR = PROJECT_DIR / "dataset"
+
+NORMAL_DIR = DATASET_DIR / "normal"
+POTHOLE_DIR = DATASET_DIR / "pothole"
+
+IMG_SIZE = (128, 128)
+BATCH_SIZE = 4
+EPOCHS = 10
+
+PROJECT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+NORMAL_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+POTHOLE_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+os.chdir(PROJECT_DIR)
+
+
+print("=" * 60)
+print("              RoadSense AI")
+print("       Pothole Detection Using CNN")
+print("=" * 60)
+
+print("\nProject folder:")
+print(PROJECT_DIR)
+
+
+# ============================================================
+# 2. REMOVE OLD SAMPLE IMAGES
+# ============================================================
+
+print("\nPreparing sample dataset...")
+
+for folder in [NORMAL_DIR, POTHOLE_DIR]:
+
+    for file in folder.iterdir():
+
+        if file.is_file():
+
+            try:
+                file.unlink()
+            except:
+                pass
+
+
+# ============================================================
+# 3. FUNCTION TO GET REAL IMAGES FROM WIKIMEDIA COMMONS
+# ============================================================
+
+def download_wikimedia_images(
+    search_text,
+    output_folder,
+    prefix,
+    number_of_images=15
+):
+
+    print(
+        f"\nSearching for: {search_text}"
+    )
+
+    api_url = "https://commons.wikimedia.org/w/api.php"
+
+    params = {
+
+        "action": "query",
+
+        "generator": "search",
+
+        "gsrsearch": search_text,
+
+        "gsrnamespace": 6,
+
+        "gsrlimit": 50,
+
+        "prop": "imageinfo",
+
+        "iiprop": "url",
+
+        "iiurlwidth": 512,
+
+        "format": "json"
+    }
+
+    try:
+
+        response = requests.get(
+            api_url,
+            params=params,
+            headers={
+                "User-Agent":
+                "RoadSenseAI/1.0"
+            },
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+    except Exception as e:
+
+        print(
+            "Could not connect to Wikimedia:"
+        )
+
+        print(e)
+
+        return 0
+
+    pages = (
+        data
+        .get("query", {})
+        .get("pages", {})
+    )
+
+    downloaded = 0
+
+    for page in pages.values():
+
+        if downloaded >= number_of_images:
+            break
+
+        image_info = page.get(
+            "imageinfo",
+            []
+        )
+
+        if not image_info:
+            continue
+
+        info = image_info[0]
+
+        image_url = info.get(
+            "thumburl",
+            info.get("url")
+        )
+
+        if not image_url:
+            continue
+
+        try:
+
+            image_response = requests.get(
+                image_url,
+                headers={
+                    "User-Agent":
+                    "RoadSenseAI/1.0"
+                },
+                timeout=30
+            )
+
+            if image_response.status_code != 200:
+                continue
+
+            file_path = (
+                output_folder /
+                f"{prefix}_{downloaded + 1}.jpg"
+            )
+
+            with open(
+                file_path,
+                "wb"
+            ) as f:
+
+                f.write(
+                    image_response.content
+                )
+
+            # Check that the downloaded file
+            # is actually readable as an image.
+            try:
+
+                from PIL import Image
+
+                img = Image.open(
+                    file_path
+                )
+
+                img.verify()
+
+            except Exception:
+
+                file_path.unlink(
+                    missing_ok=True
+                )
+
+                continue
+
+            downloaded += 1
+
+            print(
+                f"Downloaded {downloaded}/{number_of_images}"
+            )
+
+        except Exception:
+
+            continue
+
+    return downloaded
+
+
+# ============================================================
+# 4. DOWNLOAD NORMAL ROAD SAMPLE
+# ============================================================
+
+normal_count = download_wikimedia_images(
+    search_text="road surface",
+    output_folder=NORMAL_DIR,
+    prefix="normal",
+    number_of_images=15
+)
+
+
+# ============================================================
+# 5. DOWNLOAD POTHOLE SAMPLE
+# ============================================================
+
+pothole_count = download_wikimedia_images(
+    search_text="pothole road",
+    output_folder=POTHOLE_DIR,
+    prefix="pothole",
+    number_of_images=15
+)
+
+
+# ============================================================
+# 6. SHOW DATASET
+# ============================================================
+
+print("\n")
+print("=" * 60)
+print("              SAMPLE DATASET")
+print("=" * 60)
+
+print(
+    "\nNormal road images:",
+    normal_count
+)
+
+print(
+    "Pothole images:",
+    pothole_count
+)
+
+
+# ============================================================
+# 7. IF DOWNLOAD FAILED
+# ============================================================
+
+if normal_count < 5 or pothole_count < 5:
+
+    print("\n")
+    print("=" * 60)
+    print("DATASET DOWNLOAD WAS NOT SUFFICIENT")
+    print("=" * 60)
+
+    print(
+        "\nNormal images downloaded:",
+        normal_count
+    )
+
+    print(
+        "Pothole images downloaded:",
+        pothole_count
+    )
+
+    print(
+        "\nThe internet connection may have blocked"
+        " the image server."
+    )
+
+    print(
+        "\nNo fake images will be created."
+    )
+
+else:
+
+    print(
+        "\nSample dataset created successfully!"
+    )
+
+
+    # ========================================================
+    # 8. IMAGE DATA GENERATOR
+    # ========================================================
+
+    print("\nPreparing image data...")
+
+    datagen = ImageDataGenerator(
+
+        rescale=1.0 / 255.0,
+
+        validation_split=0.2,
+
+        rotation_range=10,
+
+        zoom_range=0.10,
+
+        horizontal_flip=True
+    )
+
+
+    # ========================================================
+    # 9. TRAINING DATA
+    # ========================================================
+
+    train_data = datagen.flow_from_directory(
+
+        DATASET_DIR,
+
+        target_size=IMG_SIZE,
+
+        batch_size=BATCH_SIZE,
+
+        class_mode="binary",
+
+        subset="training",
+
+        shuffle=True,
+
+        seed=42
+    )
+
+
+    # ========================================================
+    # 10. VALIDATION DATA
+    # ========================================================
+
+    validation_data = datagen.flow_from_directory(
+
+        DATASET_DIR,
+
+        target_size=IMG_SIZE,
+
+        batch_size=BATCH_SIZE,
+
+        class_mode="binary",
+
+        subset="validation",
+
+        shuffle=False,
+
+        seed=42
+    )
+
+
+    print("\nClass mapping:")
+
+    print(
+        train_data.class_indices
+    )
+
+
+    # ========================================================
+    # 11. CREATE CNN
+    # ========================================================
+
+    print("\nCreating CNN model...")
+
+    model = models.Sequential([
+
+        layers.Input(
+            shape=(128, 128, 3)
+        ),
+
+        layers.Conv2D(
+            32,
+            (3, 3),
+            activation="relu"
+        ),
+
+        layers.MaxPooling2D(
+            (2, 2)
+        ),
+
+        layers.Conv2D(
+            64,
+            (3, 3),
+            activation="relu"
+        ),
+
+        layers.MaxPooling2D(
+            (2, 2)
+        ),
+
+        layers.Conv2D(
+            128,
+            (3, 3),
+            activation="relu"
+        ),
+
+        layers.MaxPooling2D(
+            (2, 2)
+        ),
+
+        layers.Flatten(),
+
+        layers.Dense(
+            128,
+            activation="relu"
+        ),
+
+        layers.Dropout(
+            0.3
+        ),
+
+        layers.Dense(
+            1,
+            activation="sigmoid"
+        )
+    ])
+
+
+    # ========================================================
+    # 12. COMPILE CNN
+    # ========================================================
+
+    model.compile(
+
+        optimizer="adam",
+
+        loss="binary_crossentropy",
+
+        metrics=[
+            "accuracy"
+        ]
+    )
+
+    print(
+        "\nCNN model created successfully!"
+    )
+
+
+    # ========================================================
+    # 13. MODEL SUMMARY
+    # ========================================================
+
+    model.summary()
+
+
+    # ========================================================
+    # 14. TRAIN MODEL
+    # ========================================================
+
+    print("\n")
+    print("=" * 60)
+    print("              CNN TRAINING STARTED")
+    print("=" * 60)
+
+    history = model.fit(
+
+        train_data,
+
+        validation_data=validation_data,
+
+        epochs=EPOCHS
+    )
+
+
+    # ========================================================
+    # 15. EVALUATE MODEL
+    # ========================================================
+
+    print("\n")
+    print("=" * 60)
+    print("              MODEL EVALUATION")
+    print("=" * 60)
+
+    loss, accuracy = model.evaluate(
+        validation_data,
+        verbose=1
+    )
+
+
+    print(
+        "\nActual Validation Accuracy:"
+    )
+
+    print(
+        round(
+            float(accuracy) * 100,
+            2
+        ),
+        "%"
+    )
+
+
+    print(
+        "\nActual Validation Loss:"
+    )
+
+    print(
+        round(
+            float(loss),
+            4
+        )
+    )
+
+
+    # ========================================================
+    # 16. SAVE MODEL
+    # ========================================================
+
+    model_path = (
+        PROJECT_DIR /
+        "roadsense_cnn.keras"
+    )
+
+    model.save(
+        model_path
+    )
+
+    print(
+        "\nModel saved successfully!"
+    )
+
+    print(
+        "Model location:"
+    )
+
+    print(
+        model_path
+    )
+
+
+    # ========================================================
+    # 17. PREDICTION FUNCTION
+    # ========================================================
+
+    def predict_road(
+        image_path
+    ):
+
+        image_path = Path(
+            image_path
+        )
+
+        if not image_path.exists():
+
+            print(
+                "\nImage not found:"
+            )
+
+            print(
+                image_path
+            )
+
+            return
+
+
+        img = image.load_img(
+
+            image_path,
+
+            target_size=IMG_SIZE
+        )
+
+
+        img_array = (
+            image.img_to_array(
+                img
+            )
+        )
+
+
+        img_array = (
+            img_array / 255.0
+        )
+
+
+        img_array = np.expand_dims(
+
+            img_array,
+
+            axis=0
+        )
+
+
+        prediction = model.predict(
+
+            img_array,
+
+            verbose=0
+        )[0][0]
+
+
+        if prediction >= 0.5:
+
+            result = "POTHOLE"
+
+            confidence = (
+                prediction * 100
+            )
+
+        else:
+
+            result = "NORMAL ROAD"
+
+            confidence = (
+                (1 - prediction) * 100
+            )
+
+
+        print("\n")
+        print("=" * 60)
+        print("              ROAD PREDICTION")
+        print("=" * 60)
+
+        print(
+            "\nDetected:",
+            result
+        )
+
+        print(
+            "Confidence:",
+            round(
+                float(confidence),
+                2
+            ),
+            "%"
+        )
+
+        print("=" * 60)
+
+
+    # ========================================================
+    # 18. COMPLETION
+    # ========================================================
+
+    print("\n")
+    print("=" * 60)
+    print("          RoadSense AI COMPLETED")
+    print("=" * 60)
+
+    print(
+        "\nModel file:"
+    )
+
+    print(
+        "roadsense_cnn.keras"
+    )
+
+    print(
+        "\nActual validation accuracy:"
+    )
+
+    print(
+        round(
+            float(accuracy) * 100,
+            2
+        ),
+        "%"
+    )
+
+    print(
+        "\nYour CNN model is ready!"
+    )
+
+    print(
+        "\nTo test an image later:"
+    )
+
+    print(
+        r'predict_road(r"C:\path\to\road_image.jpg")'
+    )
